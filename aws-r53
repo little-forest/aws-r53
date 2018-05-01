@@ -1,0 +1,320 @@
+#!/bin/bash
+#===============================================================================
+# aws-r53 : AWS Route53 manage script
+# Date    :  2018/04/15 Start
+# Copyright: Original code by Yusuke Komori.
+#                       Copyright (c) 2018. Yusuke Komori, All rights reserved.
+#===============================================================================
+
+SCRIPT_BASE=`echo $(cd $(dirname $0); pwd)`
+SCRIPT_NAME=`basename $0`
+
+R53="aws route53"
+RC_FILE="${HOME}/.aws-r53rc"
+
+#-------------------------------------------------------------------------------
+#- common functions ------------------------------------------------------------
+
+__setupcolor() { #{{{
+  # Escape sequence
+  ESC="\e["
+  ESCEND=m
+  C_OFF=${ESC}${ESCEND}
+
+  # normal
+  C_BLACK="${ESC}30${ESCEND}"
+  C_RED="${ESC}31${ESCEND}"
+  C_GREEN="${ESC}32${ESCEND}"
+  C_YELLOW="${ESC}33${ESCEND}"
+  C_BLUE="${ESC}34${ESCEND}"
+  C_MAGENTA="${ESC}35${ESCEND}"
+  C_CYAN="${ESC}36${ESCEND}"
+  C_WHITE="${ESC}37${ESCEND}"
+
+  RES_COL=60
+  MOVE_TO_COL="echo -en \\033[${RES_COL}G"
+}
+#}}}
+
+__syslog() { #{{{
+  [[ -n "${DRY_RUN}" ]] && return 
+  [ ! "$SCRIPT_NAME" ] && local SCRIPT_NAME=`basename $0`
+  if [ "$LOG_TAG" ]; then
+    local TAG="${LOG_TAG}/${SCRIPT_NAME}"
+  else
+    local TAG="${SCRIPT_NAME}"
+  fi
+
+  local FACILITY=user
+  [[ "$LOG_FACILITY" ]] && FACILITY=$LOG_FACILITY
+
+  local LOG_LEVEL=info
+  [[ "$2" ]] && LOG_LEVEL="$2"
+
+  if [[ "$1" ]]; then
+    logger -t "$TAG" -p "${FACILITY}.${LOG_LEVEL}" "$1"
+  else
+    local OLDIFS="$IFS"
+    IFS=
+    while read LOG_LINE; do
+      logger -t "$TAG" -p "${FACILITY}.${LOG_LEVEL}" "$LOG_LINE"
+    done
+    IFS="$OLDIFS"
+  fi
+}
+#}}}
+
+__show_ok() { #{{{
+  [ "${SILENT_MODE}" ] && return
+  [[ "$1" && "$1" -gt 0 ]] && echo -en "\\033[${1}G"
+  echo -en "[ ${C_GREEN}OK${C_OFF}"
+  [ "$2" ] && echo " ]$2" || echo " ]"
+}
+#}}}
+
+__show_info() { #{{{
+  [[ -n "${SILENT_MODE}" ]] && return
+  [[ "$1" == "-n" ]] && echo -en "${C_CYAN}${2}${C_OFF}" || echo -e "${C_CYAN}${1}${C_OFF}"
+}
+#}}}
+
+__show_error() { #{{{
+  echo -e "[${C_RED}ERROR${C_OFF}] $1"
+}
+#}}}
+
+__error_end() { #{{{
+  __show_error "$1"; exit 1
+}
+#}}}
+
+
+#-------------------------------------------------------------------------------
+#- functions -------------------------------------------------------------------
+
+# usage
+#{{{
+_usage() {
+  [ "$1" ] && __show_error "$1"
+  echo "Usege:"
+  echo "  $SCRIPT_NAME (get|update) [-p PROFILE] [-z ZONE_ID] [-n NAME] [-t TYPE] [-l TTL] [-v VALUE] [-wVDh]"
+  echo "    get:    Get DNS record (type and name should be specified)"
+  echo "    update: Update DNS A recotd"
+  echo "          -p : aws-cli's profile name (Option)"
+  echo "          -z : Route53's Hosted zone ID"
+  echo "          -n : DNS record name (ex: example.com)"
+  echo "          -t : DNS record type (ex: A, CNAME, TXT, ...)"
+  echo "          -v : DNS record value"
+  echo "          -l : TTL to set (default is 300)"
+  echo "          -V : Verbode mode"
+  echo "          -D : dry-run"
+  echo "          -w : Wait for UPSERT change info to be INSYNC"
+  echo "          -h : display usage"
+  echo ""
+  echo "Configuration file:"
+  echo "  You can configure some options in '~/.aws-r53rc'. Here is example configuration."
+  echo "      AWS_CONFIG_FILE=~/.aws/credentials"
+  echo "      ZONE_ID=XXXXXXXXXXXXXXXXXXXX"
+  echo "      PROFILE=aws-r53"
+  echo ""
+  echo "Example:"
+  echo "  * Get all record set of specified hosted zone id."
+  echo "      $SCRIPT_NAME get -z ZONE_ID -V"
+  echo ""
+  echo "  * Get Sepcified DNS record."
+  echo "      $SCRIPT_NAME get -z ZONE_ID -t A -n example.com"
+  echo ""
+  echo "  * Update DNS A record and wait for synchronization."
+  echo "      $SCRIPT_NAME update -z ZONE_ID -t A -n example.com -v IP_ADDRESS -w"
+  exit 1
+}
+#}}}
+
+_get_value() {
+#{{{
+  T_RESULT=`mktemp -p /dev/shm`
+  $R53 list-resource-record-sets --hosted-zone-id="$ZONE_ID" > $T_RESULT
+  if [[ ! "$VERBOSE" ]]; then
+    [[ "$TYPE" ]] || __error_end "Type should be specified." 
+    [[ "$NAME" ]] || __error_end "Name should be specified." 
+    cat $T_RESULT | jq -r ".ResourceRecordSets[] | if .Type == \"$TYPE\" and .Name == \"$NAME.\" then . else empty end | .ResourceRecords[].Value"
+  else
+    cat $T_RESULT | jq .
+  fi
+}
+#}}}
+
+_update() {
+#{{{
+  local DOMAIN=$1
+  local TYPE=$2
+  local VALUE=$3
+  local TTL=$4
+  local CHANGE_INFO_ID
+
+  [[ ! "$DOMAIN" ]] && _usage "Domain is not specified."
+  [[ ! "$TYPE" ]] && _usage "Type is not specified."
+  [[ ! "$VALUE" ]] && _usage "Value is not specified."
+  [[ ! "$TTL" ]] && TTL=300
+
+  T_BATCH=`mktemp -p /dev/shm`
+  T_RESULT=`mktemp -p /dev/shm`
+  _create_json "$DOMAIN" "$TYPE" "$VALUE" "$TTL" >> $T_BATCH
+
+  if [[ ! "$DRY_RUN" ]]; then
+    $R53 change-resource-record-sets --hosted-zone-id="$ZONE_ID" --change-batch file://$T_BATCH > $T_RESULT
+    if [[ $? -eq 0 ]]; then
+      CHANGE_INFO_ID=`cat $T_RESULT | jq -rc '.ChangeInfo.Id'`
+      if [[ "$WAIT" ]]; then
+        _wait_for $CHANGE_INFO_ID
+      else
+        echo $CHANGE_INFO_ID
+      fi
+    fi
+  else
+    # dry-run
+    echo "$R53 change-resource-record-sets --hosted-zone-id=\"$ZONE_ID\" --change-batch file://$T_BATCH"
+    echo -n "change-batch: "
+    #cat $T_BATCH | jq -c
+    cat $T_BATCH
+  fi
+}
+#}}}
+
+_wait_for() {
+#{{{
+  local ID=$1
+  echo -ne "${C_CYAN}Waiting for ${ID}${C_OFF} "
+
+  T_RESULT=`mktemp -p /dev/shm`
+  while :; do
+    sleep 10
+    $R53 get-change --id "$ID" > $T_RESULT
+    if [[ $? -eq 0 ]]; then
+      local STATUS=`cat $T_RESULT | jq -r '.ChangeInfo.Status'`
+      if [[ $STATUS == 'INSYNC' ]]; then
+        echo -e " [ ${C_GREEN}OK${C_OFF} ]"
+        break
+      fi
+      echo -n '.'
+    else
+      echo -e " [ ${C_RED}FAILED${C_OFF} ]"
+      exit
+    fi
+  done
+}
+#}}}
+
+_script_end() {
+#{{{
+  [[ -f "$T_BATCH" ]] && rm "$T_BATCH"
+  [[ -f "$T_RESULT" ]] && rm "$T_RESULT"
+}
+trap '_script_end' EXIT
+#}}}
+
+_create_json() {
+#{{{
+  local NAME=$1
+  local TYPE=$2
+  local VALUE=$3
+  VALUE=`sed -re 's|"|\\\\"|g' <<<"$VALUE"`
+  local TTL=$4
+  cat <<EOJ
+{
+  "Comment" : "",
+  "Changes" : [
+    {
+      "Action" : "UPSERT",
+      "ResourceRecordSet" : {
+        "Name" : "$NAME",
+        "Type" : "$TYPE",
+        "TTL" : $TTL,
+        "ResourceRecords" : [
+          {
+            "Value": "$VALUE"
+          }
+        ]
+      }
+    }
+  ]
+}
+EOJ
+}
+#}}}
+
+#-------------------------------------------------------------------------------
+#- Main process ----------------------------------------------------------------
+#-------------------------------------------------------------------------------
+tty -s && __setupcolor
+
+#- Check dependencies ----------------------------------------------------------
+#{{{
+which aws > /dev/null 2>&1 || __error_end "aws-cli is not installed."
+which jq > /dev/null 2>&1 || __error_end "jq is not installed."
+#}}}
+
+#- Get subcommand --------------------------------------------------------------
+#{{{
+CMD="$1"
+case "$CMD" in
+  get) ;;
+  update) ;;
+  update-acme-challenge) ;;
+  *) _usage ;;
+esac
+shift 1
+#}}}
+
+#- Get options -----------------------------------------------------------------
+#{{{
+while getopts p:z:n:t:l:v:wDVh OPT; do
+  case "$OPT" in
+    p) PROFILE=$OPTARG
+      ;;
+    z) ZONE_ID=$OPTARG
+      ;;
+    n) NAME=$OPTARG
+      ;;
+    t) TYPE=$OPTARG
+      ;;
+    l) TTL=$OPTARG
+      ;;
+    v) VALUE=$OPTARG
+      ;;
+    w) WAIT=yes
+      ;;
+    V) VERBOSE=yes
+      ;;
+    D) DRY_RUN=yes
+      ;;
+    h|\?) _usage
+      ;;
+  esac
+done
+shift `expr $OPTIND - 1`
+#}}}
+
+#- Check options ---------------------------------------------------------------
+#{{{
+[[ -f "$RC_FILE" ]] && source $RC_FILE
+[[ ! "$ZONE_ID" ]] && _usage "Hosted zone id is not specified."
+[[ "$PROFILE" ]] && R53="$R53 --profile $PROFILE"
+#}}}
+
+#- Main process ----------------------------------------------------------------
+[[ $VERBOSE ]] && echo "Hosted zone id: $ZONE_ID"
+
+case $CMD in
+  get)
+    _get_value
+    ;;
+  update)
+    _update "$NAME" "$TYPE" "$VALUE" "$TTL"
+    ;;
+  update-acme-challenge)
+    _update "_acme-challenge.${NAME}" TXT "\"${VALUE}\"" "$TTL"
+    ;;
+esac
+
+# vim: ts=2 sw=2 sts=2 et nu foldmethod=marker
