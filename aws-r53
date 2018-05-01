@@ -10,6 +10,7 @@ SCRIPT_BASE=`echo $(cd $(dirname $0); pwd)`
 SCRIPT_NAME=`basename $0`
 
 R53="aws route53"
+RC_FILE0="/etc/aws-r53rc"
 RC_FILE="${HOME}/.aws-r53rc"
 
 #-------------------------------------------------------------------------------
@@ -297,6 +298,7 @@ shift `expr $OPTIND - 1`
 
 #- Check options ---------------------------------------------------------------
 #{{{
+[[ -f "$RC_FILE0" ]] && source $RC_FILE0
 [[ -f "$RC_FILE" ]] && source $RC_FILE
 [[ ! "$ZONE_ID" ]] && _usage "Hosted zone id is not specified."
 [[ "$PROFILE" ]] && R53="$R53 --profile $PROFILE"
