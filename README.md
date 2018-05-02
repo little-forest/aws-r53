@@ -1,4 +1,4 @@
-# Aboud
+# About
 
 'aws-r53' is an AWS Route53 manipulation helper script. This script helps us updating Route53's resource record sets, so we can easily implement dynamic DNS.
 
@@ -13,17 +13,16 @@ In order to use aws-r53, the following commands should be included in PATH envir
 
 # How to install
 
-1. Install aws-cli and configure it.
-1. Create IAM user for aws-r53 which is attached a policy as described later.
-1. Download aws-r53.
+1. Install the aws-cli and configure it.
+2. Create an IAM user for aws-r53, which is attached a policy as [described later](#Required-AWS-Policy).
+3. Download aws-r53.
 
 ```
 $ curl -o aws-r53 https://raw.githubusercontent.com/little-forest/aws-r53/master/aws-r53
 $ chmod +x aws-r53
 ```
 
-1. Create a file named /etc/aws-r53rc with the following contents. 
-
+4. Create a file named /etc/aws-r53rc with the following contents. 
 ```
 AWS_ACCESS_KEY_ID=XXXXXXXXXXXXXXXXXXXX
 AWS_SECRET_ACCESS_KEY=XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
@@ -72,7 +71,7 @@ Example:
 
 aws-r53 requires the following AWS policy.
 
-```
+```javascript
 {
     "Version": "2012-10-17",
     "Statement": [
