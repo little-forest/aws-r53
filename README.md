@@ -14,7 +14,7 @@ In order to use aws-r53, the following commands should be included in PATH envir
 # How to install
 
 1. Install the aws-cli and configure it.
-2. Create an IAM user for aws-r53, which is attached a policy as [described later](#Required-AWS-Policy).
+2. Create an IAM user for aws-r53, which is attached a policy as [described later](#required-aws-policy).
 3. Download aws-r53.
 
 ```
