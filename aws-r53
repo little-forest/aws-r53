@@ -9,9 +9,11 @@
 SCRIPT_BASE=`echo $(cd $(dirname $0); pwd)`
 SCRIPT_NAME=`basename $0`
 
-R53="aws route53"
+R53="aws --output json route53"
 RC_FILE0="/etc/aws-r53rc"
 RC_FILE="${HOME}/.aws-r53rc"
+
+R53_ENV=()
 
 #-------------------------------------------------------------------------------
 #- common functions ------------------------------------------------------------
@@ -80,7 +82,12 @@ __show_info() { #{{{
 #}}}
 
 __show_error() { #{{{
-  echo -e "[${C_RED}ERROR${C_OFF}] $1"
+  local MSG="$1"
+  if [[ -z "$MSG" ]]; then
+    MSG=`sed -re '/^[ \t]*$/d' | tr -d "\n"`
+  fi
+  tty -s || __syslog "[ERROR] $MSG" 'error'
+  echo -e "[${C_RED}ERROR${C_OFF}] $MSG"
 }
 #}}}
 
@@ -97,6 +104,7 @@ __error_end() { #{{{
 #{{{
 _usage() {
   [ "$1" ] && __show_error "$1"
+  tty -s || [ "$1" ] && __syslog "ERROR: $1" 'err'
   echo "Usege:"
   echo "  $SCRIPT_NAME (get|update) [-p PROFILE] [-z ZONE_ID] [-n NAME] [-t TYPE] [-l TTL] [-v VALUE] [-wVDh]"
   echo "    get:    Get DNS record (type and name should be specified)"
@@ -113,10 +121,12 @@ _usage() {
   echo "          -h : display usage"
   echo ""
   echo "Configuration file:"
-  echo "  You can configure some options in '~/.aws-r53rc'. Here is example configuration."
-  echo "      AWS_CONFIG_FILE=~/.aws/credentials"
+  echo "  You can configure some options in '~/.aws-r53rc' or '${RC_FILE0}'. Here is example configuration."
+  echo "      AWS_ACCESS_KEY_ID=XXXXXXXXXXXXXXXXXXXX"
+  echo "      AWS_SECRET_ACCESS_KEY=XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
   echo "      ZONE_ID=XXXXXXXXXXXXXXXXXXXX"
   echo "      PROFILE=aws-r53"
+  echo "  If both files are specified, ~/.aws-r53rc will take precedence."
   echo ""
   echo "Example:"
   echo "  * Get all record set of specified hosted zone id."
@@ -133,14 +143,20 @@ _usage() {
 
 _get_value() {
 #{{{
+  __syslog "[get] ZoneID:$ZONE_ID"
   T_RESULT=`mktemp -p /dev/shm`
-  $R53 list-resource-record-sets --hosted-zone-id="$ZONE_ID" > $T_RESULT
-  if [[ ! "$VERBOSE" ]]; then
-    [[ "$TYPE" ]] || __error_end "Type should be specified." 
-    [[ "$NAME" ]] || __error_end "Name should be specified." 
-    cat $T_RESULT | jq -r ".ResourceRecordSets[] | if .Type == \"$TYPE\" and .Name == \"$NAME.\" then . else empty end | .ResourceRecords[].Value"
+  T_ERROR=`mktemp -p /dev/shm`
+  $R53 list-resource-record-sets --hosted-zone-id="$ZONE_ID" > $T_RESULT 2> $T_ERROR
+  if [[ $? -eq 0 ]]; then
+    if [[ ! "$VERBOSE" ]]; then
+      [[ "$TYPE" ]] || __error_end "Type should be specified." 
+      [[ "$NAME" ]] || __error_end "Name should be specified." 
+      cat $T_RESULT | jq -r ".ResourceRecordSets[] | if .Type == \"$TYPE\" and .Name == \"$NAME.\" then . else empty end | .ResourceRecords[].Value"
+    else
+      cat $T_RESULT | jq .
+    fi
   else
-    cat $T_RESULT | jq .
+    cat $T_ERROR | __error_end
   fi
 }
 #}}}
@@ -160,23 +176,27 @@ _update() {
 
   T_BATCH=`mktemp -p /dev/shm`
   T_RESULT=`mktemp -p /dev/shm`
+  T_ERROR=`mktemp -p /dev/shm`
   _create_json "$DOMAIN" "$TYPE" "$VALUE" "$TTL" >> $T_BATCH
 
+  (echo -n "[update] ZoneID:$ZONE_ID "; cat $T_BATCH | jq -Mc .) | __syslog
   if [[ ! "$DRY_RUN" ]]; then
-    $R53 change-resource-record-sets --hosted-zone-id="$ZONE_ID" --change-batch file://$T_BATCH > $T_RESULT
+    $R53 change-resource-record-sets --hosted-zone-id="$ZONE_ID" --change-batch file://$T_BATCH > $T_RESULT 2> $T_ERROR
     if [[ $? -eq 0 ]]; then
-      CHANGE_INFO_ID=`cat $T_RESULT | jq -rc '.ChangeInfo.Id'`
+      CHANGE_INFO_ID=`cat $T_RESULT | jq -Mrc '.ChangeInfo.Id'`
+      __syslog "[update] request succeeded. ChangeInfoID:$CHANGE_INFO_ID"
       if [[ "$WAIT" ]]; then
         _wait_for $CHANGE_INFO_ID
       else
         echo $CHANGE_INFO_ID
       fi
+    else
+      cat $T_ERROR | __error_end
     fi
   else
     # dry-run
     echo "$R53 change-resource-record-sets --hosted-zone-id=\"$ZONE_ID\" --change-batch file://$T_BATCH"
     echo -n "change-batch: "
-    #cat $T_BATCH | jq -c
     cat $T_BATCH
   fi
 }
@@ -190,15 +210,18 @@ _wait_for() {
   T_RESULT=`mktemp -p /dev/shm`
   while :; do
     sleep 10
+    __syslog "[update] Waiting for $CHANGE_INFO_ID"
     $R53 get-change --id "$ID" > $T_RESULT
     if [[ $? -eq 0 ]]; then
       local STATUS=`cat $T_RESULT | jq -r '.ChangeInfo.Status'`
       if [[ $STATUS == 'INSYNC' ]]; then
+        __syslog "[update] $CHANGE_INFO_ID INSYNC"
         echo -e " [ ${C_GREEN}OK${C_OFF} ]"
         break
       fi
       echo -n '.'
     else
+      __syslog "[update] Waiting for $CHANGE_INFO_ID failed."
       echo -e " [ ${C_RED}FAILED${C_OFF} ]"
       exit
     fi
@@ -210,6 +233,7 @@ _script_end() {
 #{{{
   [[ -f "$T_BATCH" ]] && rm "$T_BATCH"
   [[ -f "$T_RESULT" ]] && rm "$T_RESULT"
+  [[ -f "$T_ERROR" ]] && rm "$T_ERROR"
 }
 trap '_script_end' EXIT
 #}}}
@@ -298,10 +322,31 @@ shift `expr $OPTIND - 1`
 
 #- Check options ---------------------------------------------------------------
 #{{{
-[[ -f "$RC_FILE0" ]] && source $RC_FILE0
-[[ -f "$RC_FILE" ]] && source $RC_FILE
+if [[ -f "$RC_FILE0" ]]; then
+  source $RC_FILE0
+  __syslog "$RC_FILE0 loaded."
+fi
+if [[ -f "$RC_FILE" ]]; then
+  source $RC_FILE
+  __syslog "$RC_FILE loaded."
+fi
+
 [[ ! "$ZONE_ID" ]] && _usage "Hosted zone id is not specified."
-[[ "$PROFILE" ]] && R53="$R53 --profile $PROFILE"
+if [[ "$AWS_ACCESS_KEY_ID" ]]; then
+  __syslog "AWS_ACCESS_KEY_ID is specified."
+  R53_ENV+=("AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID")
+fi
+if [[ "$AWS_SECRET_ACCESS_KEY" ]]; then
+  __syslog "AWS_SECRET_ACCESS_KEY is specified."
+  R53_ENV+=("AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY")
+fi
+if [[ "$PROFILE" ]]; then
+  __syslog "AWS-CLI Profile:$PROFILE"
+  R53="$R53 --profile $PROFILE"
+fi
+if [[ ! -z "$R53_ENV" ]]; then
+  R53="env ${R53_ENV[@]} $R53"
+fi
 #}}}
 
 #- Main process ----------------------------------------------------------------
