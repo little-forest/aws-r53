@@ -9,7 +9,8 @@
 SCRIPT_BASE=`echo $(cd $(dirname $0); pwd)`
 SCRIPT_NAME=`basename $0`
 
-R53="aws --output json route53"
+AWS_OPT="--output json route53"
+R53="aws $AWS_OPT"
 RC_FILE0="/etc/aws-r53rc"
 RC_FILE="${HOME}/.aws-r53rc"
 
@@ -122,6 +123,7 @@ _usage() {
   echo ""
   echo "Configuration file:"
   echo "  You can configure some options in '~/.aws-r53rc' or '${RC_FILE0}'. Here is example configuration."
+  echo "      AWS_PATH=<PATH_TO_AWS_CLI> (option)"
   echo "      AWS_ACCESS_KEY_ID=XXXXXXXXXXXXXXXXXXXX"
   echo "      AWS_SECRET_ACCESS_KEY=XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
   echo "      ZONE_ID=XXXXXXXXXXXXXXXXXXXX"
@@ -329,6 +331,13 @@ fi
 if [[ -f "$RC_FILE" ]]; then
   source $RC_FILE
   __syslog "$RC_FILE loaded."
+fi
+
+# aws path is specified
+if [[ "$AWS_PATH" ]]; then
+  [[ -x "$AWS_PATH" ]] || __error_end "$AWS_PATH is not found."
+  __syslog "AWS_PATH : $AWS_PATH"
+  R53="${AWS_PATH} ${AWS_OPT}"
 fi
 
 [[ ! "$ZONE_ID" ]] && _usage "Hosted zone id is not specified."
