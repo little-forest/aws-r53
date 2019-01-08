@@ -107,9 +107,11 @@ _usage() {
   [ "$1" ] && __show_error "$1"
   tty -s || [ "$1" ] && __syslog "ERROR: $1" 'err'
   echo "Usege:"
-  echo "  $SCRIPT_NAME (get|update) [-p PROFILE] [-z ZONE_ID] [-n NAME] [-t TYPE] [-l TTL] [-v VALUE] [-wVDh]"
-  echo "    get:    Get DNS record (type and name should be specified)"
-  echo "    update: Update DNS A recotd"
+  echo "  $SCRIPT_NAME (get|update|auto-update|show-ip) [-p PROFILE] [-z ZONE_ID] [-n NAME] [-t TYPE] [-l TTL] [-v VALUE] [-wVDh]"
+  echo "    get:         Get DNS record (type and name should be specified)"
+  echo "    update:      Update DNS A record"
+  echo "    auto-update: Update DNS A record using IP_SUPPLIER_SCRIPT"
+  echo "    show-ip:     Show IP address using IP_SUPPLIER_SCRIPT"
   echo "          -p : aws-cli's profile name (Option)"
   echo "          -z : Route53's Hosted zone ID"
   echo "          -n : DNS record name (ex: example.com)"
@@ -128,6 +130,7 @@ _usage() {
   echo "      AWS_SECRET_ACCESS_KEY=XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
   echo "      ZONE_ID=XXXXXXXXXXXXXXXXXXXX"
   echo "      PROFILE=aws-r53"
+  echo "      IP_SUPPLIER_SCRIPT=\"/usr/local/bin/xxxx\""
   echo "  If both files are specified, ~/.aws-r53rc will take precedence."
   echo ""
   echo "Example:"
@@ -139,6 +142,10 @@ _usage() {
   echo ""
   echo "  * Update DNS A record and wait for synchronization."
   echo "      $SCRIPT_NAME update -z ZONE_ID -t A -n example.com -v IP_ADDRESS -w"
+  echo ""
+  echo "  * Auto-Update DNS A record."
+  echo "      (IP address is auto-accuired using IP_SUPPLIER_SCRIPT specified in aws-r53rc)"
+  echo "      $SCRIPT_NAME auto-update -z ZONE_ID -t A -n example.com -w"
   exit 1
 }
 #}}}
@@ -201,6 +208,19 @@ _update() {
     echo -n "change-batch: "
     cat $T_BATCH
   fi
+}
+#}}}
+
+_auto_update() { #{{{
+  local DOMAIN=$1
+  local TYPE=$2
+  local TTL=$3
+
+  local IP=`_show_ip SILENT`
+  [[ ! "$IP" ]] && IP='(empty result)'
+  [[ "$IP" =~ [0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3} ]] || __error_end "Invalid address. : $IP"
+
+  _update "$DOMAIN" "$TYPE" "$IP" "$TTL"
 }
 #}}}
 
@@ -270,6 +290,41 @@ EOJ
 }
 #}}}
 
+_show_ip() {
+#{{{
+  local SILENT="$1"
+  if [[ ! "${IP_SUPPLIER_SCRIPT}" ]]; then
+    __error_end "IP_SUPPLIER_SCRIPT is not specified."
+  fi
+  local SCRIPT=(${IP_SUPPLIER_SCRIPT})
+  if [[ ! -x "${SCRIPT[0]}" ]]; then
+    __error_end "${SCRIPT[0]} is not executable."
+  fi
+  local LIMIT=5
+  local DELAY=1
+  local CNT=0
+
+  while [[ $CNT -lt $LIMIT ]]; do
+    # execute it
+    local IP=`${SCRIPT[@]}`
+
+    # validate it
+    if [[ "$IP" =~ [0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3} ]]; then
+      echo "${IP}"
+      return
+    else
+      # retry after sleep
+      CNT=$(($CNT + 1))
+      sleep $DELAY
+    fi
+  done
+
+  if [[ ! "$SILENT" ]]; then
+    __error_end "Couldn't get IP address. (Executed: ${IP_SUPPLIER_SCRIPT} Result:$IP)"
+  fi
+}
+#}}}
+
 #-------------------------------------------------------------------------------
 #- Main process ----------------------------------------------------------------
 #-------------------------------------------------------------------------------
@@ -287,7 +342,9 @@ CMD="$1"
 case "$CMD" in
   get) ;;
   update) ;;
+  auto-update) ;;
   update-acme-challenge) ;;
+  show-ip) ;;
   *) _usage ;;
 esac
 shift 1
@@ -368,8 +425,14 @@ case $CMD in
   update)
     _update "$NAME" "$TYPE" "$VALUE" "$TTL"
     ;;
+  auto-update)
+    _auto_update "$NAME" "$TYPE" "$TTL"
+    ;;
   update-acme-challenge)
     _update "_acme-challenge.${NAME}" TXT "\"${VALUE}\"" "$TTL"
+    ;;
+  show-ip)
+    _show_ip
     ;;
 esac
 
