@@ -34,9 +34,11 @@ ZONE_ID=XXXXXXXXXXXXXXXXXXXX
 
 ```
 Usege:
-  aws-r53 (get|update) [-p PROFILE] [-z ZONE_ID] [-n NAME] [-t TYPE] [-l TTL] [-v VALUE] [-wVDh]
-    get:    Get DNS record (type and name should be specified)
-    update: Update DNS A recotd
+  aws-r53 (get|update|auto-update|show-ip) [-p PROFILE] [-z ZONE_ID] [-n NAME] [-t TYPE] [-l TTL] [-v VALUE] [-wVDh]
+    get:         Get DNS record (type and name should be specified)
+    update:      Update DNS A record
+    auto-update: Update DNS A record using IP_SUPPLIER_SCRIPT
+    show-ip:     Show IP address using IP_SUPPLIER_SCRIPT
           -p : aws-cli's profile name (Option)
           -z : Route53's Hosted zone ID
           -n : DNS record name (ex: example.com)
@@ -50,11 +52,21 @@ Usege:
 
 Configuration file:
   You can configure some options in '~/.aws-r53rc' or '/etc/aws-r53rc'. Here is example configuration.
+
+      AWS_PATH=<PATH_TO_AWS_CLI> (option)
       AWS_ACCESS_KEY_ID=XXXXXXXXXXXXXXXXXXXX
       AWS_SECRET_ACCESS_KEY=XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
       ZONE_ID=XXXXXXXXXXXXXXXXXXXX
       PROFILE=aws-r53
+      IP_SUPPLIER_SCRIPT=\"/usr/local/bin/xxxx\"
+
   If both files are specified, ~/.aws-r53rc will take precedence.
+
+Logging:
+  aws-r53 outputs log message to syslog with logging tag "aws-r53".
+  You can check logs with following command.
+
+    sudo grep " aws-r53: " /var/log/messages
 
 Example:
   * Get all record set of specified hosted zone id.
@@ -65,6 +77,10 @@ Example:
 
   * Update DNS A record and wait for synchronization.
       aws-r53 update -z ZONE_ID -t A -n example.com -v IP_ADDRESS -w
+
+  * Auto-Update DNS A record.
+      (IP address is auto-accuired using IP_SUPPLIER_SCRIPT specified in aws-r53rc)
+      aws-r53 auto-update -z ZONE_ID -t A -n example.com -w
 ```
 
 # Required AWS Policy

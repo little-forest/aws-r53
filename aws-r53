@@ -20,20 +20,50 @@ R53_ENV=()
 #- common functions ------------------------------------------------------------
 
 __setupcolor() { #{{{
+  local C
+  local COLOR=(BLACK RED GREEN YELLOW BLUE MAGENTA CYAN WHITE GRAY)
+  local STYLE=(OFF BOLD REV UL)
+
   # Escape sequence
   ESC="\e["
   ESCEND=m
-  C_OFF=${ESC}${ESCEND}
 
-  # normal
-  C_BLACK="${ESC}30${ESCEND}"
-  C_RED="${ESC}31${ESCEND}"
-  C_GREEN="${ESC}32${ESCEND}"
-  C_YELLOW="${ESC}33${ESCEND}"
-  C_BLUE="${ESC}34${ESCEND}"
-  C_MAGENTA="${ESC}35${ESCEND}"
-  C_CYAN="${ESC}36${ESCEND}"
-  C_WHITE="${ESC}37${ESCEND}"
+  # define empty valiable
+  for C in ${STYLE[@]}; do
+    eval "C_${C}="
+  done
+  for C in ${COLOR[@]}; do
+    eval "C_${C}="
+    eval "C_B_${C}="
+  done
+
+  tty -s || return
+  C_OFF=`tput sgr0`   # Reset attribute
+  C_BOLD=`tput bold`
+  C_REV=`tput rev`    # Reverse mode
+  C_UL=`tput smul`    # Underline mode
+
+  # Background
+  C_B_BLACK=`tput setab 0`
+  C_B_RED=`tput setab 1`
+  C_B_GREEN=`tput setab 2`
+  C_B_YELLOW=`tput setab 3`
+  C_B_BLUE=`tput setab 4`
+  C_B_MAGENTA=`tput setab 5`
+  C_B_CYAN=`tput setab 6`
+  C_B_WHITE=`tput setab 7`
+  C_B_GRAY=`tput setab 102`
+
+  # Foreground
+  C_BLACK=`tput setaf 0`
+  C_RED=`tput setaf 1`
+  C_GREEN=`tput setaf 2`
+  C_YELLOW=`tput setaf 3`
+  C_BLUE=`tput setaf 4`
+  C_MAGENTA=`tput setaf 5`
+  C_CYAN=`tput setaf 6`
+  C_WHITE="${C_BOLD}`tput setaf 7`"
+  C_GRAY=`tput setaf 102`
 
   RES_COL=60
   MOVE_TO_COL="echo -en \\033[${RES_COL}G"
@@ -104,48 +134,58 @@ __error_end() { #{{{
 # usage
 #{{{
 _usage() {
-  [ "$1" ] && __show_error "$1"
-  tty -s || [ "$1" ] && __syslog "ERROR: $1" 'err'
-  echo "Usege:"
-  echo "  $SCRIPT_NAME (get|update|auto-update|show-ip) [-p PROFILE] [-z ZONE_ID] [-n NAME] [-t TYPE] [-l TTL] [-v VALUE] [-wVDh]"
-  echo "    get:         Get DNS record (type and name should be specified)"
-  echo "    update:      Update DNS A record"
-  echo "    auto-update: Update DNS A record using IP_SUPPLIER_SCRIPT"
-  echo "    show-ip:     Show IP address using IP_SUPPLIER_SCRIPT"
-  echo "          -p : aws-cli's profile name (Option)"
-  echo "          -z : Route53's Hosted zone ID"
-  echo "          -n : DNS record name (ex: example.com)"
-  echo "          -t : DNS record type (ex: A, CNAME, TXT, ...)"
-  echo "          -v : DNS record value"
-  echo "          -l : TTL to set (default is 300)"
-  echo "          -V : Verbode mode"
-  echo "          -D : dry-run"
-  echo "          -w : Wait for UPSERT change info to be INSYNC"
-  echo "          -h : display usage"
-  echo ""
-  echo "Configuration file:"
-  echo "  You can configure some options in '~/.aws-r53rc' or '${RC_FILE0}'. Here is example configuration."
-  echo "      AWS_PATH=<PATH_TO_AWS_CLI> (option)"
-  echo "      AWS_ACCESS_KEY_ID=XXXXXXXXXXXXXXXXXXXX"
-  echo "      AWS_SECRET_ACCESS_KEY=XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
-  echo "      ZONE_ID=XXXXXXXXXXXXXXXXXXXX"
-  echo "      PROFILE=aws-r53"
-  echo "      IP_SUPPLIER_SCRIPT=\"/usr/local/bin/xxxx\""
-  echo "  If both files are specified, ~/.aws-r53rc will take precedence."
-  echo ""
-  echo "Example:"
-  echo "  * Get all record set of specified hosted zone id."
-  echo "      $SCRIPT_NAME get -z ZONE_ID -V"
-  echo ""
-  echo "  * Get Sepcified DNS record."
-  echo "      $SCRIPT_NAME get -z ZONE_ID -t A -n example.com"
-  echo ""
-  echo "  * Update DNS A record and wait for synchronization."
-  echo "      $SCRIPT_NAME update -z ZONE_ID -t A -n example.com -v IP_ADDRESS -w"
-  echo ""
-  echo "  * Auto-Update DNS A record."
-  echo "      (IP address is auto-accuired using IP_SUPPLIER_SCRIPT specified in aws-r53rc)"
-  echo "      $SCRIPT_NAME auto-update -z ZONE_ID -t A -n example.com -w"
+  [[ -n "$1" ]] && __show_error "$1"
+  ( ! tty -s || [[ -n "$1" ]] ) && __syslog "ERROR: $1" 'err'
+  cat <<- EOM
+	${C_WHITE}Usege:${C_OFF}
+	  $SCRIPT_NAME (get|update|auto-update|show-ip) [-p PROFILE] [-z ZONE_ID] [-n NAME] [-t TYPE] [-l TTL] [-v VALUE] [-wVDh]
+	    get:         Get DNS record (type and name should be specified)
+	    update:      Update DNS A record
+	    auto-update: Update DNS A record using IP_SUPPLIER_SCRIPT
+	    show-ip:     Show IP address using IP_SUPPLIER_SCRIPT
+	          -p : aws-cli's profile name (Option)
+	          -z : Route53's Hosted zone ID
+	          -n : DNS record name (ex: example.com)
+	          -t : DNS record type (ex: A, CNAME, TXT, ...)
+	          -v : DNS record value
+	          -l : TTL to set (default is 300)
+	          -V : Verbode mode
+	          -D : dry-run
+	          -w : Wait for UPSERT change info to be INSYNC
+	          -h : display usage
+	
+	${C_WHITE}Configuration file:${C_OFF}
+	  You can configure some options in '~/.aws-r53rc' or '${RC_FILE0}'. Here is example configuration.
+	
+	      AWS_PATH=<PATH_TO_AWS_CLI> (option)
+	      AWS_ACCESS_KEY_ID=XXXXXXXXXXXXXXXXXXXX
+	      AWS_SECRET_ACCESS_KEY=XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+	      ZONE_ID=XXXXXXXXXXXXXXXXXXXX
+	      PROFILE=aws-r53
+	      IP_SUPPLIER_SCRIPT=\"/usr/local/bin/xxxx\"
+	
+	  If both files are specified, ~/.aws-r53rc will take precedence.
+	
+	${C_WHITE}Logging:${C_OFF}
+	  ${SCRIPT_NAME} outputs log message to syslog with logging tag "${SCRIPT_NAME}".
+	  You can check logs with following command.
+	
+	    sudo grep " ${SCRIPT_NAME}: " /var/log/messages
+	
+	${C_WHITE}Example:${C_OFF}
+	  * Get all record set of specified hosted zone id.
+	      $SCRIPT_NAME get -z ZONE_ID -V
+	
+	  * Get Sepcified DNS record.
+	      $SCRIPT_NAME get -z ZONE_ID -t A -n example.com
+	
+	  * Update DNS A record and wait for synchronization.
+	      $SCRIPT_NAME update -z ZONE_ID -t A -n example.com -v IP_ADDRESS -w
+	
+	  * Auto-Update DNS A record.
+	      (IP address is auto-accuired using IP_SUPPLIER_SCRIPT specified in aws-r53rc)
+	      $SCRIPT_NAME auto-update -z ZONE_ID -t A -n example.com -w
+	EOM
   exit 1
 }
 #}}}
@@ -345,7 +385,8 @@ case "$CMD" in
   auto-update) ;;
   update-acme-challenge) ;;
   show-ip) ;;
-  *) _usage ;;
+  -h) _usage ;;
+  *) _usage "Unknown sub command" ;;
 esac
 shift 1
 #}}}
