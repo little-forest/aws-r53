@@ -3,7 +3,7 @@
 # aws-r53 : AWS Route53 manage script
 # Date    :  2018/04/15 Start
 # Copyright: Original code by Yusuke Komori.
-#                       Copyright (c) 2018. Yusuke Komori, All rights reserved.
+#                  Copyright (c) 2018-2019. Yusuke Komori, All rights reserved.
 #===============================================================================
 
 SCRIPT_BASE=`echo $(cd $(dirname $0); pwd)`
@@ -258,7 +258,7 @@ _auto_update() { #{{{
 
   local IP=`_show_ip SILENT`
   [[ ! "$IP" ]] && IP='(empty result)'
-  [[ "$IP" =~ [0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3} ]] || __error_end "Invalid address. : $IP"
+  _validate_ip "$IP" || __error_end "Invalid address. : $IP"
 
   _update "$DOMAIN" "$TYPE" "$IP" "$TTL"
 }
@@ -340,28 +340,36 @@ _show_ip() {
   if [[ ! -x "${SCRIPT[0]}" ]]; then
     __error_end "${SCRIPT[0]} is not executable."
   fi
-  local LIMIT=5
-  local DELAY=1
+  local DELAY=(5 10 20 35 60 120 120)
   local CNT=0
 
-  while [[ $CNT -lt $LIMIT ]]; do
+  while [[ $CNT -lt ${#DELAY[@]} ]]; do
     # execute it
     local IP=`${SCRIPT[@]}`
 
     # validate it
-    if [[ "$IP" =~ [0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3} ]]; then
+    if _validate_ip "$IP"; then
       echo "${IP}"
       return
     else
       # retry after sleep
+      __syslog "Invalid IP address, retry after ${DELAY[$CNT]}sec... : $IP"
+      sleep ${DELAY[$CNT]}
       CNT=$(($CNT + 1))
-      sleep $DELAY
     fi
   done
 
   if [[ ! "$SILENT" ]]; then
     __error_end "Couldn't get IP address. (Executed: ${IP_SUPPLIER_SCRIPT} Result:$IP)"
   fi
+}
+#}}}
+
+_validate_ip() { #{{{
+  local IP="$1"
+  [[ -z "$IP" || "$IP" = "0.0.0.0" || `wc -l <<<"$IP"` -gt 1 ]] && return 1
+  local REGEX='^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'
+  [[ -n `sed -nre "/${REGEX}/p" <<<"$IP"` ]] && return 0 || return 1
 }
 #}}}
 
