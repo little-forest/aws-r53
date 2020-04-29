@@ -1,0 +1,170 @@
+#!/bin/bash
+#===============================================================================
+# dns-update : A DNS auto update script using aws-r53
+# Copyright: Original code by Yusuke Komori.
+#                       Copyright (c) 2020. Yusuke Komori, All rights reserved.
+#===============================================================================
+
+#-------------------------------------------------------------------------------
+#- common global variables -----------------------------------------------------
+__SCRIPT_BASE=`echo $(cd $(dirname $0); pwd)`
+__SCRIPT_NAME=`basename $0`
+
+__DRY_RUN=
+
+#-------------------------------------------------------------------------------
+#- global variables ------------------------------------------------------------
+_CONF_FILE=/etc/dns-update.conf
+_DOMAIN=
+_DNS_SERVER=8.8.8.8
+_SLACK_USER=`hostname`
+_SLACK_ICON=":ghost:"
+
+#-------------------------------------------------------------------------------
+#- common functions ------------------------------------------------------------
+#{{{
+__show_error() { #{{{
+  local MSG="$1"
+  echo -e "$MSG" >&2
+}
+#}}}
+
+__error_end() { #{{{
+  __show_error "$1"; exit 1
+}
+#}}}
+#}}}
+
+#-------------------------------------------------------------------------------
+#- functions -------------------------------------------------------------------
+
+_safe_load_config() { #{{{
+  local CONF="$1"
+  [[ ! -f "$CONF" ]] && return 1
+ 
+  local READ_VARS=(DOMAIN DNS_SERVER IP_PROVIDER_SCRIPT SLACK_WEBHOOK_URL SLACK_CHANNEL SLACK_USER)
+  source $CONF
+ 
+  local VALUE NUM
+  for NAME in ${READ_VARS[@]}; do
+    if [[ -v $NAME ]]; then
+      VALUE=$(eval "echo \${${NAME}[@]}")
+ 
+      # check if variable is an array
+      NUM=$(eval "echo \${#${NAME}[*]}")
+      if [[ $NUM -eq 1 ]]; then
+        echo "_${NAME}=\"${VALUE}\""
+      else
+        # for array
+        echo "_${NAME}=(${VALUE[@]})"
+      fi
+    fi
+  done
+}
+#}}}
+
+_send_slack() { #{{{
+  local MSG="$1"
+  [[ -z "$_SLACK_WEBHOOK_URL" ]] && return 1
+  curl -s -X POST --data-urlencode "payload={\"channel\": \"${SLACK_CHANNEL}\", \"username\": \"${_SLACK_USER}\", \"text\": \"${MSG}\", \"icon_emoji\": \"${_SLACK_ICON}\"}" ${_SLACK_WEBHOOK_URL} > /dev/null
+}
+#}}}
+
+_usage() { #{{{
+  [[ "$1" ]] && __show_error "$1"
+  cat <<!!!
+usege : $__SCRIPT_NAME [-c CONF_FILE] [-d DOMAIN_NAME] [-u] [-s] [-h]
+          -c : specify config file path (default: $_CONF_FILE)
+          -d : specify target domain name
+          -u : update dns record when ip address changing is detected
+          -s : be silent unless ip address is changed 
+          -h : display usage
+
+[Configuration format]
+
+  DOMAIN             : Target domain
+  DNS_SERVER         : DNS server name to check DNS record (defult: ${_DNS_SERVER})
+  IP_PROVIDER_SCRIPT : Scripth path which provides current IP address
+                         example: IP_PROVIDER_SCRIPT=(curl -s https://xxxxxx)
+  SLACK_WEBHOOK_URL  : Slack web hook url to send notification
+  SLACK_CHANNEL      : Slack channel to notify (Should to be started with '#')
+!!!
+  exit 1
+}
+#}}}
+
+#-------------------------------------------------------------------------------
+#- Main process ----------------------------------------------------------------
+#-------------------------------------------------------------------------------
+
+#- Get options -----------------------------------------------------------------
+#{{{
+while getopts c:d:ush OPT; do
+  case "$OPT" in
+    c) _CONF_FILE="$OPTARG"
+      ;;
+    d) _DOMAIN_OPT="$OPTARG"
+      ;;
+    u) _UPDATE_DNS=yes
+      ;;
+    s) _SILENT=yes
+      ;;
+    h|\?) _usage
+      ;;
+  esac
+done
+shift `expr $OPTIND - 1`
+#}}}
+
+eval `_safe_load_config "$_CONF_FILE"`
+
+[[ -n ${_DOMAIN_OPT} ]] && _DOMAIN="${_DOMAIN_OPT}"
+
+#- Check options ---------------------------------------------------------------
+#{{{
+[[ -z "${_DOMAIN}" ]] && __error_end "Domain name is not specified."
+#}}}
+
+#- Main process ----------------------------------------------------------------
+DNS_PUBLISHED_IP=`dig @${_DNS_SERVER} ${_DOMAIN} a | sed -nre '/;; ANSWER SECTION:/{n;s/.+[[:blank:]]+([0-9\.]+)$/\1/;p;Q;}'`
+CURRENT_IP=`${_IP_PROVIDER_SCRIPT[@]}`
+
+[[ "$CURRENT_IP" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]] \
+  || __error_end "Couldn't get current IP address. : ${CURRENT_IP}"
+
+MSG="Current IP : \`${CURRENT_IP}\`"
+
+# Check DNS
+if [[ "${CURRENT_IP}" != "${DNS_PUBLISHED_IP}" ]]; then
+  MSG=$(cat <<!!!
+<!channel> IP address has been changed!
+${MSG}
+\`${_DOMAIN}\` : \`${DNS_PUBLISHED_IP}\`
+!!!
+)
+else
+  # ip address is not changed
+  if [[ "$_SILENT" != yes ]]; then
+    _send_slack "$MSG"
+  fi
+  exit 0
+fi
+
+# Send slack
+_send_slack "$MSG"
+
+# Update DNS
+if [[ "$_UPDATE_DNS" == yes ]]; then
+  AWS_R53="${__SCRIPT_BASE}/aws-r53"
+  [[ ! -x "$AWS_R53" ]] && __error_end "aws-r53 executable is not found. : $AWS_R53"
+  _send_slack "Updating DNS record..."
+  $AWS_R53 update -t A -n $_DOMAIN -v $CURRENT_IP -w
+  RESULT=$?
+  if [[ $RESULT -eq 0 ]]; then
+    _send_slack "Success!!"
+  else
+    _send_slack "Failed!!"
+  fi
+fi
+
+# vim: ts=2 sw=2 sts=2 et nu foldmethod=marker
