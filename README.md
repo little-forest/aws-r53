@@ -1,8 +1,9 @@
 # About
 
-'aws-r53' is an AWS Route53 manipulation helper script. This script helps us updating Route53's resource record sets, so we can easily implement dynamic DNS.
+'aws-r53' is an AWS Route53 manipulation helper script.
+This script helps us updating Route53's resource record sets, so we can easily implement dynamic DNS.
 
-This script is very simple and has very few dependent packages, so you can easily install it.
+'aws-r53' is written as a PURE bash script and has very few dependent packages, so you can easily install it.
 
 # Requirements
 
@@ -51,7 +52,8 @@ Usege:
           -h : display usage
 
 Configuration file:
-  You can configure some options in '~/.aws-r53rc' or '/etc/aws-r53rc'. Here is example configuration.
+  You can configure some options in /home/y-komori/.aws-r53rc /etc/aws-r53.conf /etc/aws-r53rc.
+  Here is example configuration.
 
       AWS_PATH=<PATH_TO_AWS_CLI> (option)
       AWS_ACCESS_KEY_ID=XXXXXXXXXXXXXXXXXXXX
