@@ -13,6 +13,11 @@ AWS_OPT="--output json route53"
 R53="aws $AWS_OPT"
 RC_FILE0="/etc/aws-r53rc"
 RC_FILE="${HOME}/.aws-r53rc"
+RC_FILES=(${HOME}/.aws-r53rc /etc/aws-r53.conf /etc/aws-r53rc)
+JQ=jq
+JQ_PATH=(/bin/jq /usr/bin/jq /usr/local/bin/jq)
+AWS=aws
+AWS_PATH_CANDIDATE=(/bin/aws /usr/bin/aws /usr/local/bin/aws)
 
 R53_ENV=()
 
@@ -155,7 +160,8 @@ _usage() {
 	          -h : display usage
 	
 	${C_WHITE}Configuration file:${C_OFF}
-	  You can configure some options in '~/.aws-r53rc' or '${RC_FILE0}'. Here is example configuration.
+	  You can configure some options in ${RC_FILES[*]}.
+	  Here is example configuration.
 	
 	      AWS_PATH=<PATH_TO_AWS_CLI> (option)
 	      AWS_ACCESS_KEY_ID=XXXXXXXXXXXXXXXXXXXX
@@ -337,8 +343,10 @@ _show_ip() {
     __error_end "IP_SUPPLIER_SCRIPT is not specified."
   fi
   local SCRIPT=(${IP_SUPPLIER_SCRIPT})
-  if [[ ! -x "${SCRIPT[0]}" ]]; then
-    __error_end "${SCRIPT[0]} is not executable."
+  if ! which "${SCRIPT[0]}" > /dev/null 2>&1; then
+    if [[ ! -x "${SCRIPT[0]}" ]]; then
+      __error_end "${SCRIPT[0]} is not executable."
+    fi
   fi
   local DELAY=(5 10 20 35 60 120 120)
   local CNT=0
@@ -380,8 +388,16 @@ tty -s && __setupcolor
 
 #- Check dependencies ----------------------------------------------------------
 #{{{
-which aws > /dev/null 2>&1 || __error_end "aws-cli is not installed."
-which jq > /dev/null 2>&1 || __error_end "jq is not installed."
+# jq
+if ! which $JQ > /dev/null 2>&1; then
+  for C in ${JQ_PATH[@]}; do
+    if [[ -x $C ]]; then
+      JQ=$C
+      break;
+    fi
+  done
+  [[ -x $JQ ]] || __error_end "jq executalbe is not found in ${JQ_PATH[*]}."
+fi
 #}}}
 
 #- Get subcommand --------------------------------------------------------------
@@ -430,21 +446,32 @@ shift `expr $OPTIND - 1`
 
 #- Check options ---------------------------------------------------------------
 #{{{
-if [[ -f "$RC_FILE0" ]]; then
-  source $RC_FILE0
-  __syslog "$RC_FILE0 loaded."
-fi
-if [[ -f "$RC_FILE" ]]; then
-  source $RC_FILE
-  __syslog "$RC_FILE loaded."
-fi
+# load configuration
+for F in "${RC_FILES[@]}"; do
+  if [[ -f "$F" ]]; then
+    source "$F"
+    __syslog "$F loaded."
+    break
+  fi
+done
 
-# aws path is specified
-if [[ "$AWS_PATH" ]]; then
+# find aws executable
+if [[ -n "$AWS_PATH" ]]; then
   [[ -x "$AWS_PATH" ]] || __error_end "$AWS_PATH is not found."
-  __syslog "AWS_PATH : $AWS_PATH"
-  R53="${AWS_PATH} ${AWS_OPT}"
+else 
+  if ! which $AWS > /dev/null 2>&1; then
+    for C in ${AWS_PATH_CANDIDATE[@]}; do
+      if [[ -x $C ]]; then
+        AWS=$C
+        break;
+      fi
+    done
+    [[ -x $AWS ]] || __error_end "aws executalbe is not found in ${AWS_PATH_CANDIDATE[*]}."
+    AWS_PATH=$AWS
+  fi
 fi
+__syslog "AWS_PATH : $AWS_PATH"
+R53="${AWS_PATH} ${AWS_OPT}"
 
 [[ ! "$ZONE_ID" ]] && _usage "Hosted zone id is not specified."
 if [[ "$AWS_ACCESS_KEY_ID" ]]; then
